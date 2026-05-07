@@ -1,3 +1,118 @@
+// ═══════════════════════════════════════════════════════════
+// 🌐 EXPRESS SERVER (dla Render)
+// ═══════════════════════════════════════════════════════════
+const express = require('express');
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Discord Bot</title>
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    margin: 0;
+                }
+                .container {
+                    text-align: center;
+                    padding: 40px;
+                    background: rgba(255,255,255,0.1);
+                    border-radius: 20px;
+                    backdrop-filter: blur(10px);
+                }
+                h1 { font-size: 3em; margin: 0; }
+                p { font-size: 1.2em; }
+                .status { 
+                    display: inline-block;
+                    padding: 10px 20px;
+                    background: #00ff00;
+                    color: #000;
+                    border-radius: 25px;
+                    font-weight: bold;
+                    margin-top: 20px;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🤖 Discord Bot</h1>
+                <p>Bot is running successfully!</p>
+                <div class="status">✅ ONLINE</div>
+                <p style="margin-top: 30px; font-size: 0.9em;">
+                    Uptime: ${Math.floor(process.uptime())} seconds<br>
+                    Servers: ${client.guilds?.cache.size || 0}
+                </p>
+            </div>
+        </body>
+        </html>
+    `);
+});
+
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'OK',
+        uptime: process.uptime(),
+        guilds: client.guilds?.cache.size || 0,
+        users: client.users?.cache.size || 0,
+        ping: client.ws?.ping || 0
+    });
+});
+
+app.get('/stats', (req, res) => {
+    res.json({
+        status: 'online',
+        uptime: process.uptime(),
+        guilds: client.guilds?.cache.size || 0,
+        users: client.users?.cache.size || 0,
+        channels: client.channels?.cache.size || 0,
+        ping: client.ws?.ping || 0,
+        memoryUsage: process.memoryUsage()
+    });
+});
+
+app.listen(PORT, () => {
+    console.log(`🌐 Express server running on port ${PORT}`);
+});
+
+// ═══════════════════════════════════════════════════════════
+// TERAZ RESZTA KODU BOTA (Discord.js)
+// ═══════════════════════════════════════════════════════════
+
+const { 
+    Client, 
+    GatewayIntentBits, 
+    EmbedBuilder, 
+    ActionRowBuilder, 
+    ButtonBuilder, 
+    ButtonStyle,
+    ChannelType,
+    PermissionFlagsBits,
+    REST,
+    Routes,
+    StringSelectMenuBuilder,
+    StringSelectMenuOptionBuilder,
+    AttachmentBuilder
+} = require('discord.js');
+const fs = require('fs');
+
+// Załaduj .env TYLKO jeśli istnieje (lokalnie)
+if (fs.existsSync('.env')) {
+    require('dotenv').config();
+    console.log('📁 Załadowano .env (tryb lokalny)');
+} else {
+    console.log('☁️ Używam zmiennych środowiskowych (Render)');
+}
+
+// CAŁA RESZTA TWOJEGO KODU BOTA...
 const { 
     Client, 
     GatewayIntentBits, 
