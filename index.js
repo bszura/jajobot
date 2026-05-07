@@ -57,8 +57,8 @@ try {
     console.log('🤖 Creating Discord client (TEST 1: Basic intents)...');
     
     client = new Client({
-        intents: [GatewayIntentBits.Guilds] // Tylko podstawowy intent
-    });
+    intents: [] // ZERO intents - test czystego tokena
+});
     
     console.log('✅ Discord client created');
     
