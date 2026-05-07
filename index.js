@@ -14,7 +14,7 @@ console.log('✅ Environment loaded');
 console.log('📦 Loading Express...');
 const express = require('express');
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 app.get('/', (req, res) => {
     res.json({
