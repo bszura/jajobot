@@ -22,8 +22,6 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-let botStatus = 'Starting...';
-
 app.use(express.json());
 
 app.get('/', (req, res) => {
@@ -96,10 +94,14 @@ app.get('/', (req, res) => {
         <body>
             <div class="container">
                 <h1>🤖 Ultimate Discord Bot</h1>
-                <p>${botStatus}</p>
+                <p>Wielofunkcyjny bot Discord działa poprawnie!</p>
                 <div class="status">✅ ONLINE</div>
                 
                 <div class="stats">
+                    <div class="stat-item">
+                        ⏰ Uptime:<br>
+                        <span class="stat-value">${Math.floor(process.uptime() / 60)}m</span>
+                    </div>
                     <div class="stat-item">
                         🌐 Serwery:<br>
                         <span class="stat-value">${client.guilds?.cache.size || 0}</span>
@@ -124,7 +126,9 @@ app.get('/health', (req, res) => {
         status: 'OK',
         bot: client.user?.tag || 'Not ready',
         guilds: client.guilds?.cache.size || 0,
-        uptime: process.uptime()
+        users: client.users?.cache.size || 0,
+        uptime: process.uptime(),
+        ping: client.ws?.ping || 0
     });
 });
 
@@ -148,7 +152,7 @@ const client = new Client({
 });
 
 // ═══════════════════════════════════════════════════════════
-// 💾 BAZA DANYCH (JSON)
+// 💾 BAZA DANYCH
 // ═══════════════════════════════════════════════════════════
 
 const invites = new Map();
@@ -181,7 +185,7 @@ function saveWarnings() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// 🎫 KATEGORIE TICKETÓW
+// 🎫 TICKET CATEGORIES
 // ═══════════════════════════════════════════════════════════
 
 const TICKET_CATEGORIES = {
@@ -261,7 +265,7 @@ async function updateMemberCount(guild) {
             await channel.setName(`👥 Członków: ${guild.memberCount}`);
         }
     } catch (error) {
-        console.error('Błąd aktualizacji licznika:', error.message);
+        console.error('Błąd licznika:', error.message);
     }
 }
 
@@ -270,8 +274,6 @@ async function updateMemberCount(guild) {
 // ═══════════════════════════════════════════════════════════
 
 client.once('ready', async () => {
-    botStatus = `Bot online jako ${client.user.tag}`;
-    
     console.log(`
 ╔═══════════════════════════════════════╗
 ║   🤖 BOT ONLINE!                      ║
@@ -287,11 +289,8 @@ client.once('ready', async () => {
         await updateMemberCount(guild);
     }
     
-    // Rejestruj komendy TYLKO jeśli mamy CLIENT_ID i GUILD_ID
     if (process.env.CLIENT_ID && process.env.GUILD_ID) {
         await registerCommands();
-    } else {
-        console.log('⚠️ CLIENT_ID lub GUILD_ID brak - pomijam rejestrację komend');
     }
     
     console.log('✅ Wszystkie systemy działają!');
@@ -331,29 +330,24 @@ client.on('guildMemberAdd', async (member) => {
                 .addFields(
                     { 
                         name: '📨 Zaproszony przez', 
-                        value: inviter ? `**${inviter.tag}**` : '❓ Nieznane zaproszenie',
+                        value: inviter ? `**${inviter.tag}**` : '❓ Nieznane',
                         inline: true 
                     },
                     { 
                         name: '📅 Konto utworzone', 
                         value: `<t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`,
                         inline: true 
-                    },
-                    {
-                        name: '✅ Co dalej?',
-                        value: '• Użyj `/verify` aby się zweryfikować\n• Przeczytaj regulamin\n• Miłej zabawy!'
                     }
                 )
                 .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
-                .setTimestamp()
-                .setFooter({ text: member.guild.name, iconURL: member.guild.iconURL() });
+                .setTimestamp();
             
             await lobbyChannel.send({ content: `${member}`, embeds: [welcomeEmbed] });
         }
         
         await updateMemberCount(member.guild);
     } catch (error) {
-        console.error('Błąd w guildMemberAdd:', error.message);
+        console.error('Błąd guildMemberAdd:', error.message);
     }
 });
 
@@ -365,7 +359,7 @@ client.on('guildMemberRemove', async (member) => {
         }
         await updateMemberCount(member.guild);
     } catch (error) {
-        console.error('Błąd w guildMemberRemove:', error.message);
+        console.error('Błąd guildMemberRemove:', error.message);
     }
 });
 
@@ -392,13 +386,63 @@ client.on('messageCreate', async (message) => {
             await levelChannel.send({ embeds: [levelUpEmbed] });
         }
         
-        // Auto-reakcje
         const content = message.content.toLowerCase();
         if (content.includes('bot')) await message.react('🤖').catch(() => {});
         if (content.includes('❤️')) await message.react('❤️').catch(() => {});
         if (content.includes('cześć') || content.includes('hej')) await message.react('👋').catch(() => {});
     } catch (error) {
-        console.error('Błąd w messageCreate:', error.message);
+        console.error('Błąd messageCreate:', error.message);
+    }
+});
+
+// ═══════════════════════════════════════════════════════════
+// 🗑️ LOGI WIADOMOŚCI
+// ═══════════════════════════════════════════════════════════
+
+client.on('messageDelete', async (message) => {
+    if (!message.guild) return;
+    if (message.author?.bot) return;
+    if (!process.env.MESSAGE_LOG_CHANNEL_ID) return;
+    
+    try {
+        const logChannel = message.guild.channels.cache.get(process.env.MESSAGE_LOG_CHANNEL_ID);
+        if (!logChannel) return;
+        
+        const embed = new EmbedBuilder()
+            .setColor('#ff0000')
+            .setAuthor({ name: 'Wiadomość usunięta', iconURL: message.author?.displayAvatarURL() })
+            .setDescription(`**Autor:** ${message.author}\n**Kanał:** ${message.channel}\n**Treść:**\n\`\`\`${(message.content || 'Brak treści').substring(0, 1000)}\`\`\``)
+            .setTimestamp();
+        
+        await logChannel.send({ embeds: [embed] });
+    } catch (error) {
+        console.error('Błąd messageDelete:', error.message);
+    }
+});
+
+client.on('messageUpdate', async (oldMessage, newMessage) => {
+    if (!oldMessage.guild) return;
+    if (oldMessage.author?.bot) return;
+    if (oldMessage.content === newMessage.content) return;
+    if (!process.env.MESSAGE_LOG_CHANNEL_ID) return;
+    
+    try {
+        const logChannel = oldMessage.guild.channels.cache.get(process.env.MESSAGE_LOG_CHANNEL_ID);
+        if (!logChannel) return;
+        
+        const embed = new EmbedBuilder()
+            .setColor('#FFA500')
+            .setAuthor({ name: 'Wiadomość edytowana', iconURL: oldMessage.author?.displayAvatarURL() })
+            .setDescription(`**Autor:** ${oldMessage.author}\n**Kanał:** ${oldMessage.channel}`)
+            .addFields(
+                { name: '📝 Przed', value: `\`\`\`${(oldMessage.content || 'Brak').substring(0, 500)}\`\`\`` },
+                { name: '✅ Po', value: `\`\`\`${(newMessage.content || 'Brak').substring(0, 500)}\`\`\`` }
+            )
+            .setTimestamp();
+        
+        await logChannel.send({ embeds: [embed] });
+    } catch (error) {
+        console.error('Błąd messageUpdate:', error.message);
     }
 });
 
@@ -409,23 +453,15 @@ client.on('messageCreate', async (message) => {
 client.on('inviteCreate', async (invite) => {
     try {
         const cachedInvites = invites.get(invite.guild.id);
-        if (cachedInvites) {
-            cachedInvites.set(invite.code, invite.uses);
-        }
-    } catch (error) {
-        console.error('Błąd inviteCreate:', error.message);
-    }
+        if (cachedInvites) cachedInvites.set(invite.code, invite.uses);
+    } catch (e) {}
 });
 
 client.on('inviteDelete', async (invite) => {
     try {
         const cachedInvites = invites.get(invite.guild.id);
-        if (cachedInvites) {
-            cachedInvites.delete(invite.code);
-        }
-    } catch (error) {
-        console.error('Błąd inviteDelete:', error.message);
-    }
+        if (cachedInvites) cachedInvites.delete(invite.code);
+    } catch (e) {}
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -437,73 +473,22 @@ client.on('interactionCreate', async (interaction) => {
     
     try {
         
-        // ✅ VERIFY
-        if (interaction.commandName === 'verify') {
-            if (!process.env.VERIFIED_ROLE_ID) {
-                return interaction.reply({ content: '❌ Rola weryfikacji nie jest skonfigurowana!', ephemeral: true });
-            }
-            
-            const member = interaction.member;
-            
-            if (member.roles.cache.has(process.env.VERIFIED_ROLE_ID)) {
-                return interaction.reply({ content: '✅ Jesteś już zweryfikowany!', ephemeral: true });
-            }
-            
-            const verifyEmbed = new EmbedBuilder()
-                .setColor('#5865F2')
-                .setTitle('🔐 Weryfikacja konta')
-                .setDescription('**Kliknij przycisk poniżej aby zweryfikować swoje konto!**\n\n✨ Po weryfikacji otrzymasz pełny dostęp do serwera')
-                .setTimestamp();
-            
-            const verifyButton = new ButtonBuilder()
-                .setCustomId('verify_button')
-                .setLabel('✅ Zweryfikuj się')
-                .setStyle(ButtonStyle.Success);
-            
-            const row = new ActionRowBuilder().addComponents(verifyButton);
-            
-            await interaction.reply({ embeds: [verifyEmbed], components: [row], ephemeral: true });
-        }
-        
-        if (interaction.customId === 'verify_button') {
-            const verifiedRole = interaction.guild.roles.cache.get(process.env.VERIFIED_ROLE_ID);
-            
-            if (!verifiedRole) {
-                return interaction.reply({ content: '❌ Rola weryfikacji nie istnieje!', ephemeral: true });
-            }
-            
-            await interaction.member.roles.add(verifiedRole);
-            
-            const successEmbed = new EmbedBuilder()
-                .setColor('#00ff00')
-                .setTitle('✅ Weryfikacja zakończona!')
-                .setDescription(`**Gratulacje ${interaction.user}!**\n\n✅ Zostałeś zweryfikowany\n🎉 Witamy oficjalnie!`)
-                .setTimestamp();
-            
-            await interaction.update({ embeds: [successEmbed], components: [] });
-            
-            const lobbyChannel = interaction.guild.channels.cache.get(process.env.LOBBY_CHANNEL_ID);
-            if (lobbyChannel) {
-                await lobbyChannel.send(`🎊 **${interaction.user.tag}** został zweryfikowany!`);
-            }
-        }
-        
         // 🎫 TICKET
         if (interaction.commandName === 'ticket') {
-            const existingTicket = activeTickets.get(interaction.user.id);
-            if (existingTicket) {
-                return interaction.reply({ content: `❌ Masz już otwarty ticket: <#${existingTicket}>`, ephemeral: true });
+            const existing = activeTickets.get(interaction.user.id);
+            if (existing) {
+                return interaction.reply({ content: `❌ Masz już ticket: <#${existing}>`, ephemeral: true });
             }
             
-            const ticketEmbed = new EmbedBuilder()
+            const embed = new EmbedBuilder()
                 .setColor('#5865F2')
                 .setTitle('🎫 Otwórz Ticket')
-                .setDescription('**Wybierz kategorię:**\n\n' + Object.values(TICKET_CATEGORIES).map(cat => `${cat.emoji} **${cat.name}**\n${cat.description}`).join('\n\n'))
+                .setDescription('**Wybierz powód utworzenia ticketu:**')
                 .setTimestamp();
             
-            const selectMenu = new StringSelectMenuBuilder()
-                .setCustomId('ticket_category')
-                .setPlaceholder('🎫 Wybierz kategorię')
+            const select = new StringSelectMenuBuilder()
+                .setCustomId('ticket_select')
+                .setPlaceholder('Wybierz kategorię')
                 .addOptions(
                     Object.entries(TICKET_CATEGORIES).map(([key, cat]) => 
                         new StringSelectMenuOptionBuilder()
@@ -514,57 +499,70 @@ client.on('interactionCreate', async (interaction) => {
                     )
                 );
             
-            const row = new ActionRowBuilder().addComponents(selectMenu);
-            await interaction.reply({ embeds: [ticketEmbed], components: [row], ephemeral: true });
+            const row = new ActionRowBuilder().addComponents(select);
+            await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
         }
         
-        if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_category') {
+        if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_select') {
             await interaction.deferReply({ ephemeral: true });
             
-            const category = interaction.values[0];
-            const categoryData = TICKET_CATEGORIES[category];
+            const categoryKey = interaction.values[0];
+            const category = TICKET_CATEGORIES[categoryKey];
+            
+            const permissionOverwrites = [
+                { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+                { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
+            ];
+            
+            if (process.env.SELLER_ROLE_ID) {
+                permissionOverwrites.push({
+                    id: process.env.SELLER_ROLE_ID,
+                    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageMessages]
+                });
+            }
             
             const ticketChannel = await interaction.guild.channels.create({
-                name: `ticket-${interaction.user.username}`.toLowerCase(),
+                name: `ticket-${interaction.user.username}`,
                 type: ChannelType.GuildText,
                 parent: process.env.TICKET_CATEGORY_ID || null,
-                permissionOverwrites: [
-                    { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-                    { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
-                ]
+                permissionOverwrites
             });
             
             activeTickets.set(interaction.user.id, ticketChannel.id);
             
             const ticketEmbed = new EmbedBuilder()
                 .setColor('#5865F2')
-                .setTitle(`${categoryData.emoji} ${categoryData.name}`)
-                .setDescription(`**Witaj ${interaction.user}!**\n\nOpisz swój problem, a wkrótce Ci pomożemy!`)
+                .setTitle(`${category.emoji} ${category.name}`)
+                .setDescription(`**Witaj ${interaction.user}!**\n\nOpisz swój problem, team wkrótce pomoże.`)
                 .setTimestamp();
             
-            const closeButton = new ButtonBuilder()
+            const closeBtn = new ButtonBuilder()
                 .setCustomId('close_ticket')
                 .setLabel('🔒 Zamknij')
                 .setStyle(ButtonStyle.Danger);
             
-            const row = new ActionRowBuilder().addComponents(closeButton);
+            const row = new ActionRowBuilder().addComponents(closeBtn);
             
-            await ticketChannel.send({ content: `${interaction.user}`, embeds: [ticketEmbed], components: [row] });
-            await interaction.editReply({ content: `✅ Ticket utworzony: ${ticketChannel}` });
+            await ticketChannel.send({
+                content: process.env.SELLER_ROLE_ID ? `${interaction.user} <@&${process.env.SELLER_ROLE_ID}>` : `${interaction.user}`,
+                embeds: [ticketEmbed],
+                components: [row]
+            });
+            
+            await interaction.editReply({ content: `✅ Ticket: ${ticketChannel}` });
         }
         
         if (interaction.customId === 'close_ticket') {
-            await interaction.reply('🔒 Zamykanie ticketu za 5 sekund...');
+            await interaction.reply('🔒 Zamykanie za 5s...');
             
-            for (const [userId, channelId] of activeTickets.entries()) {
-                if (channelId === interaction.channel.id) {
-                    activeTickets.delete(userId);
-                    break;
+            setTimeout(async () => {
+                for (const [userId, channelId] of activeTickets.entries()) {
+                    if (channelId === interaction.channel.id) {
+                        activeTickets.delete(userId);
+                        break;
+                    }
                 }
-            }
-            
-            setTimeout(() => {
-                interaction.channel.delete().catch(() => {});
+                await interaction.channel.delete().catch(() => {});
             }, 5000);
         }
         
@@ -572,7 +570,6 @@ client.on('interactionCreate', async (interaction) => {
         if (interaction.commandName === 'level') {
             const target = interaction.options.getUser('użytkownik') || interaction.user;
             const userData = userLevels[target.id] || { xp: 0, level: 0 };
-            
             const nextLevelXP = getXpForLevel(userData.level + 1);
             const progress = ((userData.xp / nextLevelXP) * 100).toFixed(1);
             
@@ -604,7 +601,7 @@ client.on('interactionCreate', async (interaction) => {
             
             const embed = new EmbedBuilder()
                 .setColor('#FFD700')
-                .setTitle('🏆 Leaderboard - Top 10')
+                .setTitle('🏆 Leaderboard')
                 .setDescription(description || 'Brak danych')
                 .setTimestamp();
             
@@ -614,20 +611,17 @@ client.on('interactionCreate', async (interaction) => {
         // 👤 AVATAR
         if (interaction.commandName === 'avatar') {
             const target = interaction.options.getUser('użytkownik') || interaction.user;
-            
             const embed = new EmbedBuilder()
                 .setColor('#5865F2')
                 .setTitle(`Avatar ${target.tag}`)
                 .setImage(target.displayAvatarURL({ dynamic: true, size: 4096 }))
                 .setTimestamp();
-            
             await interaction.reply({ embeds: [embed] });
         }
         
         // 📊 SERVERINFO
         if (interaction.commandName === 'serverinfo') {
             const { guild } = interaction;
-            
             const embed = new EmbedBuilder()
                 .setColor('#5865F2')
                 .setTitle(`📊 ${guild.name}`)
@@ -638,7 +632,24 @@ client.on('interactionCreate', async (interaction) => {
                     { name: '📅 Utworzony', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:R>`, inline: true }
                 )
                 .setTimestamp();
+            await interaction.reply({ embeds: [embed] });
+        }
+        
+        // 👤 USERINFO
+        if (interaction.commandName === 'userinfo') {
+            const target = interaction.options.getUser('użytkownik') || interaction.user;
+            const member = await interaction.guild.members.fetch(target.id);
             
+            const embed = new EmbedBuilder()
+                .setColor('#5865F2')
+                .setTitle(`👤 ${target.tag}`)
+                .setThumbnail(target.displayAvatarURL({ dynamic: true }))
+                .addFields(
+                    { name: '🆔 ID', value: `\`${target.id}\``, inline: true },
+                    { name: '📅 Utworzony', value: `<t:${Math.floor(target.createdTimestamp / 1000)}:R>`, inline: true },
+                    { name: '📥 Dołączył', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: true }
+                )
+                .setTimestamp();
             await interaction.reply({ embeds: [embed] });
         }
         
@@ -646,20 +657,18 @@ client.on('interactionCreate', async (interaction) => {
         if (interaction.commandName === 'roll') {
             const max = interaction.options.getInteger('maksimum') || 100;
             const result = Math.floor(Math.random() * max) + 1;
-            
             const embed = new EmbedBuilder()
                 .setColor('#FFD700')
                 .setTitle('🎲 Rzut kostką')
                 .setDescription(`${interaction.user} wyrzucił **${result}** (1-${max})!`)
                 .setTimestamp();
-            
             await interaction.reply({ embeds: [embed] });
         }
         
         // 🎱 8BALL
         if (interaction.commandName === '8ball') {
             const question = interaction.options.getString('pytanie');
-            const answers = ['Tak', 'Nie', 'Może', 'Zdecydowanie tak', 'Zdecydowanie nie', 'Nie jestem pewien'];
+            const answers = ['Tak', 'Nie', 'Może', 'Zdecydowanie tak', 'Zdecydowanie nie', 'Nie jestem pewien', 'Pytaj później'];
             const answer = answers[Math.floor(Math.random() * answers.length)];
             
             const embed = new EmbedBuilder()
@@ -670,7 +679,6 @@ client.on('interactionCreate', async (interaction) => {
                     { name: '💬 Odpowiedź', value: `**${answer}**` }
                 )
                 .setTimestamp();
-            
             await interaction.reply({ embeds: [embed] });
         }
         
@@ -680,21 +688,19 @@ client.on('interactionCreate', async (interaction) => {
                 .setColor('#5865F2')
                 .setTitle('📚 Lista Komend')
                 .addFields(
-                    { name: '✅ Weryfikacja', value: '`/verify` - Zweryfikuj się' },
                     { name: '🎫 Tickety', value: '`/ticket` - Otwórz ticket' },
-                    { name: '📊 Poziomy', value: '`/level` - Sprawdź poziom\n`/leaderboard` - Top 10' },
-                    { name: '👤 Info', value: '`/avatar` - Avatar\n`/serverinfo` - Info o serwerze' },
-                    { name: '🎮 Fun', value: '`/roll` - Rzut kostką\n`/8ball` - Magiczna kula' }
+                    { name: '📊 Poziomy', value: '`/level` - Poziom\n`/leaderboard` - Ranking' },
+                    { name: '👤 Info', value: '`/avatar` - Avatar\n`/userinfo` - O użytkowniku\n`/serverinfo` - O serwerze' },
+                    { name: '🎮 Fun', value: '`/roll` - Kostka\n`/8ball` - Magiczna kula' }
                 )
                 .setTimestamp();
-            
             await interaction.reply({ embeds: [embed], ephemeral: true });
         }
         
     } catch (error) {
-        console.error('Błąd w interakcji:', error);
+        console.error('Błąd interakcji:', error);
         if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: '❌ Wystąpił błąd!', ephemeral: true }).catch(() => {});
+            await interaction.reply({ content: '❌ Błąd!', ephemeral: true }).catch(() => {});
         }
     }
 });
@@ -705,30 +711,14 @@ client.on('interactionCreate', async (interaction) => {
 
 async function registerCommands() {
     const commands = [
-        { name: 'verify', description: 'Zweryfikuj swoje konto' },
-        { name: 'ticket', description: 'Otwórz ticket supportowy' },
-        { 
-            name: 'level', 
-            description: 'Sprawdź poziom',
-            options: [{ name: 'użytkownik', description: 'Użytkownik', type: 6, required: false }]
-        },
-        { name: 'leaderboard', description: 'Top 10 użytkowników' },
-        { 
-            name: 'avatar', 
-            description: 'Pokaż avatar',
-            options: [{ name: 'użytkownik', description: 'Użytkownik', type: 6, required: false }]
-        },
-        { name: 'serverinfo', description: 'Info o serwerze' },
-        { 
-            name: 'roll', 
-            description: 'Rzut kostką',
-            options: [{ name: 'maksimum', description: 'Max wartość', type: 4, required: false }]
-        },
-        { 
-            name: '8ball', 
-            description: 'Magiczna kula',
-            options: [{ name: 'pytanie', description: 'Pytanie', type: 3, required: true }]
-        },
+        { name: 'ticket', description: 'Otwórz ticket' },
+        { name: 'level', description: 'Sprawdź poziom', options: [{ name: 'użytkownik', type: 6, required: false }] },
+        { name: 'leaderboard', description: 'Top 10' },
+        { name: 'avatar', description: 'Avatar', options: [{ name: 'użytkownik', type: 6, required: false }] },
+        { name: 'userinfo', description: 'Info użytkownika', options: [{ name: 'użytkownik', type: 6, required: false }] },
+        { name: 'serverinfo', description: 'Info serwera' },
+        { name: 'roll', description: 'Kostka', options: [{ name: 'maksimum', type: 4, required: false }] },
+        { name: '8ball', description: 'Magiczna kula', options: [{ name: 'pytanie', type: 3, required: true }] },
         { name: 'help', description: 'Lista komend' }
     ];
     
@@ -736,21 +726,15 @@ async function registerCommands() {
     
     try {
         console.log('🔄 Rejestrowanie komend...');
-        
         await rest.put(
             Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
             { body: commands }
         );
-        
         console.log(`✅ Zarejestrowano ${commands.length} komend!`);
     } catch (error) {
-        console.error('❌ Błąd rejestracji komend:', error.message);
+        console.error('❌ Błąd komend:', error.message);
     }
 }
-
-// ═══════════════════════════════════════════════════════════
-// 🚀 LOGIN
-// ═══════════════════════════════════════════════════════════
 
 console.log('⚡ Logging in...');
 client.login(process.env.DISCORD_TOKEN);
