@@ -96,7 +96,6 @@ app.get('/', (req, res) => {
                 <h1>🤖 Ultimate Discord Bot</h1>
                 <p>Wielofunkcyjny bot Discord działa poprawnie!</p>
                 <div class="status">✅ ONLINE</div>
-                
                 <div class="stats">
                     <div class="stat-item">
                         ⏰ Uptime:<br>
@@ -258,7 +257,6 @@ function addXP(userId) {
 
 async function updateMemberCount(guild) {
     if (!process.env.MEMBER_COUNT_CHANNEL_ID) return;
-    
     try {
         const channel = guild.channels.cache.get(process.env.MEMBER_COUNT_CHANNEL_ID);
         if (channel) {
@@ -291,6 +289,8 @@ client.once('ready', async () => {
     
     if (process.env.CLIENT_ID && process.env.GUILD_ID) {
         await registerCommands();
+    } else {
+        console.log('⚠️ Brak CLIENT_ID lub GUILD_ID - pomijam rejestrację komend');
     }
     
     console.log('✅ Wszystkie systemy działają!');
@@ -374,7 +374,7 @@ client.on('messageCreate', async (message) => {
     try {
         const newLevel = addXP(message.author.id);
         
-        if (newLevel && process.env.LEVEL_UP_CHANNEL_ID) {
+        if (newLevel) {
             const levelUpEmbed = new EmbedBuilder()
                 .setColor('#FFD700')
                 .setTitle('🎉 LEVEL UP!')
@@ -382,7 +382,10 @@ client.on('messageCreate', async (message) => {
                 .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
                 .setTimestamp();
             
-            const levelChannel = message.guild.channels.cache.get(process.env.LEVEL_UP_CHANNEL_ID) || message.channel;
+            const levelChannel = process.env.LEVEL_UP_CHANNEL_ID 
+                ? message.guild.channels.cache.get(process.env.LEVEL_UP_CHANNEL_ID) || message.channel
+                : message.channel;
+            
             await levelChannel.send({ embeds: [levelUpEmbed] });
         }
         
@@ -472,23 +475,27 @@ client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand() && !interaction.isButton() && !interaction.isStringSelectMenu()) return;
     
     try {
-        
-        // 🎫 TICKET
+
+        // 🎫 TICKET PANEL - właściciel używa raz, wysyła publiczny embed
         if (interaction.commandName === 'ticket') {
-            const existing = activeTickets.get(interaction.user.id);
-            if (existing) {
-                return interaction.reply({ content: `❌ Masz już ticket: <#${existing}>`, ephemeral: true });
-            }
-            
             const embed = new EmbedBuilder()
                 .setColor('#5865F2')
-                .setTitle('🎫 Otwórz Ticket')
-                .setDescription('**Wybierz powód utworzenia ticketu:**')
+                .setTitle('🎫 System Ticketów')
+                .setDescription(
+                    '**Potrzebujesz pomocy?**\n\n' +
+                    'Wybierz kategorię z menu poniżej aby otworzyć ticket.\n' +
+                    'Nasz team odpowie najszybciej jak to możliwe!\n\n' +
+                    '🛠️ **Pomoc Techniczna** - problemy techniczne, błędy\n' +
+                    '⚠️ **Zgłoszenie** - zgłoś użytkownika lub problem\n' +
+                    '🤝 **Współpraca** - propozycje współpracy\n' +
+                    '📝 **Inne** - pozostałe sprawy'
+                )
+                .setFooter({ text: 'Możesz mieć tylko 1 otwarty ticket jednocześnie' })
                 .setTimestamp();
-            
+
             const select = new StringSelectMenuBuilder()
                 .setCustomId('ticket_select')
-                .setPlaceholder('Wybierz kategorię')
+                .setPlaceholder('📂 Wybierz kategorię ticketu...')
                 .addOptions(
                     Object.entries(TICKET_CATEGORIES).map(([key, cat]) => 
                         new StringSelectMenuOptionBuilder()
@@ -498,63 +505,112 @@ client.on('interactionCreate', async (interaction) => {
                             .setEmoji(cat.emoji)
                     )
                 );
-            
+
             const row = new ActionRowBuilder().addComponents(select);
-            await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
-        }
-        
-        if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_select') {
-            await interaction.deferReply({ ephemeral: true });
-            
-            const categoryKey = interaction.values[0];
-            const category = TICKET_CATEGORIES[categoryKey];
-            
-            const permissionOverwrites = [
-                { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-                { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }
-            ];
-            
-            if (process.env.SELLER_ROLE_ID) {
-                permissionOverwrites.push({
-                    id: process.env.SELLER_ROLE_ID,
-                    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageMessages]
-                });
-            }
-            
-            const ticketChannel = await interaction.guild.channels.create({
-                name: `ticket-${interaction.user.username}`,
-                type: ChannelType.GuildText,
-                parent: process.env.TICKET_CATEGORY_ID || null,
-                permissionOverwrites
-            });
-            
-            activeTickets.set(interaction.user.id, ticketChannel.id);
-            
-            const ticketEmbed = new EmbedBuilder()
-                .setColor('#5865F2')
-                .setTitle(`${category.emoji} ${category.name}`)
-                .setDescription(`**Witaj ${interaction.user}!**\n\nOpisz swój problem, team wkrótce pomoże.`)
-                .setTimestamp();
-            
-            const closeBtn = new ButtonBuilder()
-                .setCustomId('close_ticket')
-                .setLabel('🔒 Zamknij')
-                .setStyle(ButtonStyle.Danger);
-            
-            const row = new ActionRowBuilder().addComponents(closeBtn);
-            
-            await ticketChannel.send({
-                content: process.env.SELLER_ROLE_ID ? `${interaction.user} <@&${process.env.SELLER_ROLE_ID}>` : `${interaction.user}`,
-                embeds: [ticketEmbed],
+
+            // Publiczny embed na kanale (nie ephemeral!)
+            await interaction.reply({ 
+                embeds: [embed], 
                 components: [row]
             });
-            
-            await interaction.editReply({ content: `✅ Ticket: ${ticketChannel}` });
         }
-        
+
+        // Użytkownik wybiera kategorię ticketu
+        if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_select') {
+            await interaction.deferReply({ ephemeral: true });
+
+            // Sprawdź czy już ma otwarty ticket
+            const existing = activeTickets.get(interaction.user.id);
+            if (existing) {
+                return interaction.editReply({ 
+                    content: `❌ Masz już otwarty ticket: <#${existing}>\nZamknij go zanim otworzysz nowy!` 
+                });
+            }
+
+            const categoryKey = interaction.values[0];
+            const category = TICKET_CATEGORIES[categoryKey];
+
+            try {
+                const permissionOverwrites = [
+                    { 
+                        id: interaction.guild.id, 
+                        deny: [PermissionFlagsBits.ViewChannel] 
+                    },
+                    { 
+                        id: interaction.user.id, 
+                        allow: [
+                            PermissionFlagsBits.ViewChannel, 
+                            PermissionFlagsBits.SendMessages, 
+                            PermissionFlagsBits.ReadMessageHistory
+                        ] 
+                    }
+                ];
+                
+                if (process.env.SELLER_ROLE_ID) {
+                    permissionOverwrites.push({
+                        id: process.env.SELLER_ROLE_ID,
+                        allow: [
+                            PermissionFlagsBits.ViewChannel,
+                            PermissionFlagsBits.SendMessages,
+                            PermissionFlagsBits.ManageMessages,
+                            PermissionFlagsBits.ReadMessageHistory
+                        ]
+                    });
+                }
+
+                const ticketChannel = await interaction.guild.channels.create({
+                    name: `ticket-${interaction.user.username}`,
+                    type: ChannelType.GuildText,
+                    parent: process.env.TICKET_CATEGORY_ID || null,
+                    permissionOverwrites
+                });
+
+                activeTickets.set(interaction.user.id, ticketChannel.id);
+
+                const ticketEmbed = new EmbedBuilder()
+                    .setColor('#5865F2')
+                    .setTitle(`${category.emoji} ${category.name}`)
+                    .setDescription(
+                        `**Witaj ${interaction.user}!**\n\n` +
+                        `Opisz swój problem, a nasz team wkrótce pomoże.\n\n` +
+                        `📋 Kategoria: **${category.name}**`
+                    )
+                    .setFooter({ text: `Ticket stworzony przez ${interaction.user.tag}` })
+                    .setTimestamp();
+
+                const closeBtn = new ButtonBuilder()
+                    .setCustomId('close_ticket')
+                    .setLabel('🔒 Zamknij Ticket')
+                    .setStyle(ButtonStyle.Danger);
+
+                const row = new ActionRowBuilder().addComponents(closeBtn);
+
+                await ticketChannel.send({
+                    content: process.env.SELLER_ROLE_ID 
+                        ? `${interaction.user} <@&${process.env.SELLER_ROLE_ID}>` 
+                        : `${interaction.user}`,
+                    embeds: [ticketEmbed],
+                    components: [row]
+                });
+
+                await interaction.editReply({ 
+                    content: `✅ Twój ticket został utworzony: ${ticketChannel}` 
+                });
+
+            } catch (error) {
+                console.error('Błąd tworzenia ticketu:', error);
+                await interaction.editReply({ 
+                    content: '❌ Wystąpił błąd podczas tworzenia ticketu.' 
+                });
+            }
+        }
+
+        // Zamknięcie ticketu
         if (interaction.customId === 'close_ticket') {
-            await interaction.reply('🔒 Zamykanie za 5s...');
-            
+            await interaction.reply({ 
+                content: '🔒 Ticket zostanie zamknięty za 5 sekund...' 
+            });
+
             setTimeout(async () => {
                 for (const [userId, channelId] of activeTickets.entries()) {
                     if (channelId === interaction.channel.id) {
@@ -565,7 +621,7 @@ client.on('interactionCreate', async (interaction) => {
                 await interaction.channel.delete().catch(() => {});
             }, 5000);
         }
-        
+
         // 📊 LEVEL
         if (interaction.commandName === 'level') {
             const target = interaction.options.getUser('użytkownik') || interaction.user;
@@ -586,10 +642,12 @@ client.on('interactionCreate', async (interaction) => {
             
             await interaction.reply({ embeds: [embed] });
         }
-        
+
         // 🏆 LEADERBOARD
         if (interaction.commandName === 'leaderboard') {
-            const sorted = Object.entries(userLevels).sort((a, b) => b[1].xp - a[1].xp).slice(0, 10);
+            const sorted = Object.entries(userLevels)
+                .sort((a, b) => b[1].xp - a[1].xp)
+                .slice(0, 10);
             
             let description = '';
             for (let i = 0; i < sorted.length; i++) {
@@ -601,13 +659,13 @@ client.on('interactionCreate', async (interaction) => {
             
             const embed = new EmbedBuilder()
                 .setColor('#FFD700')
-                .setTitle('🏆 Leaderboard')
+                .setTitle('🏆 Leaderboard - Top 10')
                 .setDescription(description || 'Brak danych')
                 .setTimestamp();
             
             await interaction.reply({ embeds: [embed] });
         }
-        
+
         // 👤 AVATAR
         if (interaction.commandName === 'avatar') {
             const target = interaction.options.getUser('użytkownik') || interaction.user;
@@ -618,7 +676,7 @@ client.on('interactionCreate', async (interaction) => {
                 .setTimestamp();
             await interaction.reply({ embeds: [embed] });
         }
-        
+
         // 📊 SERVERINFO
         if (interaction.commandName === 'serverinfo') {
             const { guild } = interaction;
@@ -629,16 +687,25 @@ client.on('interactionCreate', async (interaction) => {
                 .addFields(
                     { name: '👑 Właściciel', value: `<@${guild.ownerId}>`, inline: true },
                     { name: '👥 Członków', value: `**${guild.memberCount}**`, inline: true },
-                    { name: '📅 Utworzony', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:R>`, inline: true }
+                    { name: '📅 Utworzony', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:R>`, inline: true },
+                    { name: '💬 Kanały', value: `**${guild.channels.cache.size}**`, inline: true },
+                    { name: '🎭 Role', value: `**${guild.roles.cache.size}**`, inline: true },
+                    { name: '😊 Emoji', value: `**${guild.emojis.cache.size}**`, inline: true }
                 )
                 .setTimestamp();
             await interaction.reply({ embeds: [embed] });
         }
-        
+
         // 👤 USERINFO
         if (interaction.commandName === 'userinfo') {
             const target = interaction.options.getUser('użytkownik') || interaction.user;
             const member = await interaction.guild.members.fetch(target.id);
+            
+            const roles = member.roles.cache
+                .filter(role => role.id !== interaction.guild.id)
+                .sort((a, b) => b.position - a.position)
+                .map(role => role.toString())
+                .slice(0, 5);
             
             const embed = new EmbedBuilder()
                 .setColor('#5865F2')
@@ -646,13 +713,14 @@ client.on('interactionCreate', async (interaction) => {
                 .setThumbnail(target.displayAvatarURL({ dynamic: true }))
                 .addFields(
                     { name: '🆔 ID', value: `\`${target.id}\``, inline: true },
-                    { name: '📅 Utworzony', value: `<t:${Math.floor(target.createdTimestamp / 1000)}:R>`, inline: true },
-                    { name: '📥 Dołączył', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: true }
+                    { name: '📅 Konto', value: `<t:${Math.floor(target.createdTimestamp / 1000)}:R>`, inline: true },
+                    { name: '📥 Dołączył', value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: true },
+                    { name: '🎭 Role', value: roles.join(', ') || 'Brak ról' }
                 )
                 .setTimestamp();
             await interaction.reply({ embeds: [embed] });
         }
-        
+
         // 🎲 ROLL
         if (interaction.commandName === 'roll') {
             const max = interaction.options.getInteger('maksimum') || 100;
@@ -664,11 +732,15 @@ client.on('interactionCreate', async (interaction) => {
                 .setTimestamp();
             await interaction.reply({ embeds: [embed] });
         }
-        
+
         // 🎱 8BALL
         if (interaction.commandName === '8ball') {
             const question = interaction.options.getString('pytanie');
-            const answers = ['Tak', 'Nie', 'Może', 'Zdecydowanie tak', 'Zdecydowanie nie', 'Nie jestem pewien', 'Pytaj później'];
+            const answers = [
+                'Tak', 'Nie', 'Może', 'Zdecydowanie tak', 
+                'Zdecydowanie nie', 'Nie jestem pewien', 'Pytaj później',
+                'Absolutnie tak!', 'Raczej nie', 'Wszystko wskazuje na tak'
+            ];
             const answer = answers[Math.floor(Math.random() * answers.length)];
             
             const embed = new EmbedBuilder()
@@ -681,26 +753,29 @@ client.on('interactionCreate', async (interaction) => {
                 .setTimestamp();
             await interaction.reply({ embeds: [embed] });
         }
-        
+
         // ℹ️ HELP
         if (interaction.commandName === 'help') {
             const embed = new EmbedBuilder()
                 .setColor('#5865F2')
                 .setTitle('📚 Lista Komend')
+                .setDescription('Wszystkie dostępne komendy bota:')
                 .addFields(
-                    { name: '🎫 Tickety', value: '`/ticket` - Otwórz ticket' },
-                    { name: '📊 Poziomy', value: '`/level` - Poziom\n`/leaderboard` - Ranking' },
-                    { name: '👤 Info', value: '`/avatar` - Avatar\n`/userinfo` - O użytkowniku\n`/serverinfo` - O serwerze' },
-                    { name: '🎮 Fun', value: '`/roll` - Kostka\n`/8ball` - Magiczna kula' }
+                    { name: '🎫 Tickety', value: '`/ticket` - Wyślij panel ticketów na kanał (admin)' },
+                    { name: '📊 Poziomy', value: '`/level` - Sprawdź poziom\n`/leaderboard` - Ranking top 10' },
+                    { name: '👤 Informacje', value: '`/avatar` - Avatar\n`/userinfo` - Info o użytkowniku\n`/serverinfo` - Info o serwerze' },
+                    { name: '🎮 Fun', value: '`/roll` - Rzut kostką\n`/8ball` - Magiczna kula' },
+                    { name: 'ℹ️ Inne', value: '`/help` - Ta wiadomość' }
                 )
+                .setFooter({ text: 'Ultimate Discord Bot 🤖' })
                 .setTimestamp();
             await interaction.reply({ embeds: [embed], ephemeral: true });
         }
-        
+
     } catch (error) {
         console.error('Błąd interakcji:', error);
         if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: '❌ Błąd!', ephemeral: true }).catch(() => {});
+            await interaction.reply({ content: '❌ Wystąpił błąd!', ephemeral: true }).catch(() => {});
         }
     }
 });
@@ -713,19 +788,17 @@ async function registerCommands() {
     const commands = [
         { 
             name: 'ticket', 
-            description: 'Otwórz nowy ticket supportowy' 
+            description: 'Wyślij panel ticketów na kanał (tylko admin)' 
         },
         { 
             name: 'level', 
-            description: 'Sprawdź poziom użytkownika', 
-            options: [
-                { 
-                    name: 'użytkownik', 
-                    description: 'Wybierz użytkownika do sprawdzenia',
-                    type: 6, 
-                    required: false 
-                }
-            ] 
+            description: 'Sprawdź poziom użytkownika',
+            options: [{ 
+                name: 'użytkownik', 
+                description: 'Wybierz użytkownika do sprawdzenia',
+                type: 6, 
+                required: false 
+            }]
         },
         { 
             name: 'leaderboard', 
@@ -733,27 +806,23 @@ async function registerCommands() {
         },
         { 
             name: 'avatar', 
-            description: 'Pokaż avatar użytkownika', 
-            options: [
-                { 
-                    name: 'użytkownik', 
-                    description: 'Wybierz użytkownika',
-                    type: 6, 
-                    required: false 
-                }
-            ] 
+            description: 'Pokaż avatar użytkownika',
+            options: [{ 
+                name: 'użytkownik', 
+                description: 'Wybierz użytkownika',
+                type: 6, 
+                required: false 
+            }]
         },
         { 
             name: 'userinfo', 
-            description: 'Pokaż informacje o użytkowniku', 
-            options: [
-                { 
-                    name: 'użytkownik', 
-                    description: 'Wybierz użytkownika',
-                    type: 6, 
-                    required: false 
-                }
-            ] 
+            description: 'Pokaż informacje o użytkowniku',
+            options: [{ 
+                name: 'użytkownik', 
+                description: 'Wybierz użytkownika',
+                type: 6, 
+                required: false 
+            }]
         },
         { 
             name: 'serverinfo', 
@@ -761,27 +830,23 @@ async function registerCommands() {
         },
         { 
             name: 'roll', 
-            description: 'Rzuć kostką', 
-            options: [
-                { 
-                    name: 'maksimum', 
-                    description: 'Maksymalna wartość kostki (domyślnie 100)',
-                    type: 4, 
-                    required: false 
-                }
-            ] 
+            description: 'Rzuć kostką',
+            options: [{ 
+                name: 'maksimum', 
+                description: 'Maksymalna wartość kostki (domyślnie 100)',
+                type: 4, 
+                required: false 
+            }]
         },
         { 
             name: '8ball', 
-            description: 'Zapytaj magiczną kulę', 
-            options: [
-                { 
-                    name: 'pytanie', 
-                    description: 'Twoje pytanie do magicznej kuli',
-                    type: 3, 
-                    required: true 
-                }
-            ] 
+            description: 'Zapytaj magiczną kulę',
+            options: [{ 
+                name: 'pytanie', 
+                description: 'Twoje pytanie do magicznej kuli',
+                type: 3, 
+                required: true 
+            }]
         },
         { 
             name: 'help', 
@@ -802,5 +867,10 @@ async function registerCommands() {
         console.error('❌ Błąd komend:', error.message);
     }
 }
+
+// ═══════════════════════════════════════════════════════════
+// 🚀 LOGIN
+// ═══════════════════════════════════════════════════════════
+
 console.log('⚡ Logging in...');
 client.login(process.env.DISCORD_TOKEN);
