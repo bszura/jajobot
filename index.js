@@ -198,6 +198,16 @@ const TICKET_CATEGORIES = {
         emoji: '⚠️',
         description: 'Zgłoś użytkownika lub problem'
     },
+    sale: {
+        name: '💰 Sprzedaż',
+        emoji: '💰',
+        description: 'Chcesz coś sprzedać'
+    },
+    purchase: {
+        name: '🛒 Zakup',
+        emoji: '🛒',
+        description: 'Chcesz coś kupić'
+    },
     partnership: {
         name: '🤝 Współpraca',
         emoji: '🤝',
@@ -487,6 +497,8 @@ client.on('interactionCreate', async (interaction) => {
                     'Nasz team odpowie najszybciej jak to możliwe!\n\n' +
                     '🛠️ **Pomoc Techniczna** - problemy techniczne, błędy\n' +
                     '⚠️ **Zgłoszenie** - zgłoś użytkownika lub problem\n' +
+                    '💰 **Sprzedaż** - chcesz coś sprzedać\n' +
+                    '🛒 **Zakup** - chcesz coś kupić\n' +
                     '🤝 **Współpraca** - propozycje współpracy\n' +
                     '📝 **Inne** - pozostałe sprawy'
                 )
