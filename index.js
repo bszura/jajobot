@@ -711,15 +711,82 @@ client.on('interactionCreate', async (interaction) => {
 
 async function registerCommands() {
     const commands = [
-        { name: 'ticket', description: 'Otwórz ticket' },
-        { name: 'level', description: 'Sprawdź poziom', options: [{ name: 'użytkownik', type: 6, required: false }] },
-        { name: 'leaderboard', description: 'Top 10' },
-        { name: 'avatar', description: 'Avatar', options: [{ name: 'użytkownik', type: 6, required: false }] },
-        { name: 'userinfo', description: 'Info użytkownika', options: [{ name: 'użytkownik', type: 6, required: false }] },
-        { name: 'serverinfo', description: 'Info serwera' },
-        { name: 'roll', description: 'Kostka', options: [{ name: 'maksimum', type: 4, required: false }] },
-        { name: '8ball', description: 'Magiczna kula', options: [{ name: 'pytanie', type: 3, required: true }] },
-        { name: 'help', description: 'Lista komend' }
+        { 
+            name: 'ticket', 
+            description: 'Otwórz nowy ticket supportowy' 
+        },
+        { 
+            name: 'level', 
+            description: 'Sprawdź poziom użytkownika', 
+            options: [
+                { 
+                    name: 'użytkownik', 
+                    description: 'Wybierz użytkownika do sprawdzenia',
+                    type: 6, 
+                    required: false 
+                }
+            ] 
+        },
+        { 
+            name: 'leaderboard', 
+            description: 'Zobacz ranking top 10 użytkowników' 
+        },
+        { 
+            name: 'avatar', 
+            description: 'Pokaż avatar użytkownika', 
+            options: [
+                { 
+                    name: 'użytkownik', 
+                    description: 'Wybierz użytkownika',
+                    type: 6, 
+                    required: false 
+                }
+            ] 
+        },
+        { 
+            name: 'userinfo', 
+            description: 'Pokaż informacje o użytkowniku', 
+            options: [
+                { 
+                    name: 'użytkownik', 
+                    description: 'Wybierz użytkownika',
+                    type: 6, 
+                    required: false 
+                }
+            ] 
+        },
+        { 
+            name: 'serverinfo', 
+            description: 'Pokaż informacje o serwerze' 
+        },
+        { 
+            name: 'roll', 
+            description: 'Rzuć kostką', 
+            options: [
+                { 
+                    name: 'maksimum', 
+                    description: 'Maksymalna wartość kostki (domyślnie 100)',
+                    type: 4, 
+                    required: false 
+                }
+            ] 
+        },
+        { 
+            name: '8ball', 
+            description: 'Zapytaj magiczną kulę', 
+            options: [
+                { 
+                    name: 'pytanie', 
+                    description: 'Twoje pytanie do magicznej kuli',
+                    type: 3, 
+                    required: true 
+                }
+            ] 
+        },
+        { 
+            name: 'help', 
+            description: 'Pokaż listę wszystkich komend' 
+        }
     ];
     
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -735,6 +802,5 @@ async function registerCommands() {
         console.error('❌ Błąd komend:', error.message);
     }
 }
-
 console.log('⚡ Logging in...');
 client.login(process.env.DISCORD_TOKEN);
