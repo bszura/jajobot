@@ -1,3 +1,4 @@
+/* 
 const express = require('express');
 const { 
     Client, 
@@ -2237,3 +2238,4 @@ async function registerCommands() {
 
 console.log('⚡ Logging in...');
 client.login(process.env.DISCORD_TOKEN);
+*/
