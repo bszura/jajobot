@@ -28,11 +28,43 @@ const turso = createClient({
     authToken: process.env.TURSO_AUTH_TOKEN,
 });
 
+// Test połączenia z bazą danych
+async function testDatabaseConnection() {
+    try {
+        await turso.execute({
+            sql: 'SELECT 1 as test',
+            args: []
+        });
+        console.log('✅ Połączenie z bazą danych Turso działa!');
+        return true;
+    } catch (error) {
+        console.error('❌ Błąd połączenia z bazą danych:', error.message);
+        console.log('⚠️ Sprawdź TURSO_DATABASE_URL i TURSO_AUTH_TOKEN');
+        return false;
+    }
+}
+
+// Bezpieczna funkcja wykonywania SQL
+async function safeExecute(sql, args = []) {
+    try {
+        const result = await turso.execute({
+            sql: sql,
+            args: args
+        });
+        return result;
+    } catch (error) {
+        console.error(`❌ Błąd SQL: ${sql}`, error.message);
+        return { rows: [] };
+    }
+}
+
 // Inicjalizacja tabel
 async function initDatabase() {
     try {
+        console.log('📊 Tworzenie tabel bazy danych...');
+
         // Tabela dla autoryzowanych użytkowników (RestoreCord)
-        await turso.execute(`
+        await safeExecute(`
             CREATE TABLE IF NOT EXISTS authorized_users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL UNIQUE,
@@ -48,7 +80,7 @@ async function initDatabase() {
         `);
 
         // Tabela backupów serwerów (RestoreCord)
-        await turso.execute(`
+        await safeExecute(`
             CREATE TABLE IF NOT EXISTS server_backups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 backup_id TEXT NOT NULL UNIQUE,
@@ -63,7 +95,7 @@ async function initDatabase() {
         `);
 
         // Tabela członków w backupach (RestoreCord)
-        await turso.execute(`
+        await safeExecute(`
             CREATE TABLE IF NOT EXISTS backup_members (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 backup_id TEXT NOT NULL,
@@ -73,17 +105,12 @@ async function initDatabase() {
                 avatar TEXT,
                 joined_at DATETIME,
                 roles TEXT,
-                nickname TEXT,
-                FOREIGN KEY (backup_id) REFERENCES server_backups (backup_id)
+                nickname TEXT
             )
         `);
 
-        // ═══════════════════════════════════════════════════════════
-        // 📊 NOWE TABELE DLA BEZPIECZEŃSTWA DANYCH
-        // ═══════════════════════════════════════════════════════════
-
         // Tabela poziomów użytkowników
-        await turso.execute(`
+        await safeExecute(`
             CREATE TABLE IF NOT EXISTS user_levels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL,
@@ -100,7 +127,7 @@ async function initDatabase() {
         `);
 
         // Tabela ostrzeżeń
-        await turso.execute(`
+        await safeExecute(`
             CREATE TABLE IF NOT EXISTS user_warnings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL,
@@ -114,7 +141,7 @@ async function initDatabase() {
         `);
 
         // Tabela zaproszeń (invite tracking)
-        await turso.execute(`
+        await safeExecute(`
             CREATE TABLE IF NOT EXISTS guild_invites (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 guild_id TEXT NOT NULL,
@@ -129,7 +156,7 @@ async function initDatabase() {
         `);
 
         // Tabela join tracking
-        await turso.execute(`
+        await safeExecute(`
             CREATE TABLE IF NOT EXISTS member_joins (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL,
@@ -144,7 +171,7 @@ async function initDatabase() {
         `);
 
         // Tabela aktywnych ticketów
-        await turso.execute(`
+        await safeExecute(`
             CREATE TABLE IF NOT EXISTS active_tickets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL,
@@ -153,13 +180,12 @@ async function initDatabase() {
                 category TEXT NOT NULL,
                 status TEXT DEFAULT 'open',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                closed_at DATETIME,
-                UNIQUE(user_id, guild_id, status)
+                closed_at DATETIME
             )
         `);
 
         // Tabela konfiguracji gildii
-        await turso.execute(`
+        await safeExecute(`
             CREATE TABLE IF NOT EXISTS guild_config (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 guild_id TEXT NOT NULL UNIQUE,
@@ -179,7 +205,7 @@ async function initDatabase() {
         `);
 
         // Tabela statystyk serwera
-        await turso.execute(`
+        await safeExecute(`
             CREATE TABLE IF NOT EXISTS guild_stats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 guild_id TEXT NOT NULL,
@@ -196,6 +222,7 @@ async function initDatabase() {
         console.log('✅ Wszystkie tabele bazy danych zainicjalizowane!');
     } catch (error) {
         console.error('❌ Błąd inicjalizacji bazy danych:', error);
+        console.log('⚠️ Bot będzie działał bez bazy danych (dane nie będą zapisywane)');
     }
 }
 
@@ -205,17 +232,18 @@ async function initDatabase() {
 
 async function getUserLevel(userId, guildId) {
     try {
-        const result = await turso.execute({
-            sql: `SELECT * FROM user_levels WHERE user_id = ? AND guild_id = ?`,
-            args: [userId, guildId]
-        });
+        const result = await safeExecute(
+            `SELECT * FROM user_levels WHERE user_id = ? AND guild_id = ?`,
+            [userId, guildId]
+        );
         
         if (result.rows.length > 0) {
+            const row = result.rows[0];
             return {
-                xp: parseInt(result.rows[0].xp),
-                level: parseInt(result.rows[0].level),
-                lastMessage: new Date(result.rows[0].last_message_at).getTime(),
-                totalMessages: parseInt(result.rows[0].total_messages)
+                xp: parseInt(row.xp) || 0,
+                level: parseInt(row.level) || 0,
+                lastMessage: new Date(row.last_message_at).getTime() || 0,
+                totalMessages: parseInt(row.total_messages) || 0
             };
         }
         
@@ -241,12 +269,12 @@ async function updateUserLevel(userId, guildId, username, xpGain) {
         const newLevel = Math.floor(0.1 * Math.sqrt(newXP));
         const newMessageCount = userData.totalMessages + 1;
 
-        await turso.execute({
-            sql: `INSERT OR REPLACE INTO user_levels 
-                  (user_id, guild_id, username, xp, level, last_message_at, total_messages, updated_at)
-                  VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP)`,
-            args: [userId, guildId, username, newXP, newLevel, newMessageCount]
-        });
+        await safeExecute(
+            `INSERT OR REPLACE INTO user_levels 
+             (user_id, guild_id, username, xp, level, last_message_at, total_messages, updated_at)
+             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP)`,
+            [userId, guildId, username, newXP.toString(), newLevel.toString(), newMessageCount.toString()]
+        );
 
         return newLevel > oldLevel ? newLevel : null;
     } catch (error) {
@@ -257,10 +285,10 @@ async function updateUserLevel(userId, guildId, username, xpGain) {
 
 async function getTopUsers(guildId, limit = 10) {
     try {
-        const result = await turso.execute({
-            sql: `SELECT * FROM user_levels WHERE guild_id = ? ORDER BY xp DESC LIMIT ?`,
-            args: [guildId, limit]
-        });
+        const result = await safeExecute(
+            `SELECT * FROM user_levels WHERE guild_id = ? ORDER BY xp DESC LIMIT ?`,
+            [guildId, limit.toString()]
+        );
         return result.rows;
     } catch (error) {
         console.error('❌ Błąd pobierania rankingu:', error);
@@ -275,19 +303,19 @@ async function getTopUsers(guildId, limit = 10) {
 async function saveGuildInvites(guildId, invites) {
     try {
         // Usuń stare zaproszenia
-        await turso.execute({
-            sql: `DELETE FROM guild_invites WHERE guild_id = ?`,
-            args: [guildId]
-        });
+        await safeExecute(`DELETE FROM guild_invites WHERE guild_id = ?`, [guildId]);
 
-        // Zapisz nowe
-        for (const [code, uses] of invites.entries()) {
-            await turso.execute({
-                sql: `INSERT INTO guild_invites (guild_id, code, uses, created_by, updated_at)
-                      VALUES (?, ?, ?, 'unknown', CURRENT_TIMESTAMP)`,
-                args: [guildId, code, uses]
-            });
+        // Zapisz nowe (jeśli są jakieś)
+        if (invites.size > 0) {
+            for (const [code, uses] of invites.entries()) {
+                await safeExecute(
+                    `INSERT INTO guild_invites (guild_id, code, uses, created_by, updated_at)
+                     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+                    [guildId, code, uses.toString(), 'system']
+                );
+            }
         }
+        
         console.log(`✅ Zapisano ${invites.size} zaproszeń dla ${guildId}`);
     } catch (error) {
         console.error('❌ Błąd zapisywania zaproszeń:', error);
@@ -296,10 +324,10 @@ async function saveGuildInvites(guildId, invites) {
 
 async function loadGuildInvites(guildId) {
     try {
-        const result = await turso.execute({
-            sql: `SELECT code, uses FROM guild_invites WHERE guild_id = ?`,
-            args: [guildId]
-        });
+        const result = await safeExecute(
+            `SELECT code, uses FROM guild_invites WHERE guild_id = ?`,
+            [guildId]
+        );
 
         const invitesMap = new Map();
         for (const row of result.rows) {
@@ -316,12 +344,12 @@ async function loadGuildInvites(guildId) {
 
 async function saveMemberJoin(userId, guildId, username, invitedBy = null, inviteCode = null, accountCreated = null) {
     try {
-        await turso.execute({
-            sql: `INSERT INTO member_joins 
-                  (user_id, guild_id, username, invited_by, invite_code, joined_at, account_created)
-                  VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
-            args: [userId, guildId, username, invitedBy, inviteCode, accountCreated]
-        });
+        await safeExecute(
+            `INSERT INTO member_joins 
+             (user_id, guild_id, username, invited_by, invite_code, joined_at, account_created)
+             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
+            [userId, guildId, username, invitedBy, inviteCode, accountCreated]
+        );
     } catch (error) {
         console.error('❌ Błąd zapisywania dołączenia:', error);
     }
@@ -333,12 +361,12 @@ async function saveMemberJoin(userId, guildId, username, invitedBy = null, invit
 
 async function saveActiveTicket(userId, guildId, channelId, category) {
     try {
-        await turso.execute({
-            sql: `INSERT OR REPLACE INTO active_tickets 
-                  (user_id, guild_id, channel_id, category, status, created_at)
-                  VALUES (?, ?, ?, ?, 'open', CURRENT_TIMESTAMP)`,
-            args: [userId, guildId, channelId, category]
-        });
+        await safeExecute(
+            `INSERT OR REPLACE INTO active_tickets 
+             (user_id, guild_id, channel_id, category, status, created_at)
+             VALUES (?, ?, ?, ?, 'open', CURRENT_TIMESTAMP)`,
+            [userId, guildId, channelId, category]
+        );
     } catch (error) {
         console.error('❌ Błąd zapisywania ticketu:', error);
     }
@@ -346,11 +374,11 @@ async function saveActiveTicket(userId, guildId, channelId, category) {
 
 async function removeActiveTicket(userId, guildId) {
     try {
-        await turso.execute({
-            sql: `UPDATE active_tickets SET status = 'closed', closed_at = CURRENT_TIMESTAMP 
-                  WHERE user_id = ? AND guild_id = ? AND status = 'open'`,
-            args: [userId, guildId]
-        });
+        await safeExecute(
+            `UPDATE active_tickets SET status = 'closed', closed_at = CURRENT_TIMESTAMP 
+             WHERE user_id = ? AND guild_id = ? AND status = 'open'`,
+            [userId, guildId]
+        );
     } catch (error) {
         console.error('❌ Błąd usuwania ticketu:', error);
     }
@@ -358,11 +386,11 @@ async function removeActiveTicket(userId, guildId) {
 
 async function getActiveTicket(userId, guildId) {
     try {
-        const result = await turso.execute({
-            sql: `SELECT channel_id FROM active_tickets 
-                  WHERE user_id = ? AND guild_id = ? AND status = 'open'`,
-            args: [userId, guildId]
-        });
+        const result = await safeExecute(
+            `SELECT channel_id FROM active_tickets 
+             WHERE user_id = ? AND guild_id = ? AND status = 'open'`,
+            [userId, guildId]
+        );
         
         return result.rows.length > 0 ? result.rows[0].channel_id : null;
     } catch (error) {
@@ -373,9 +401,9 @@ async function getActiveTicket(userId, guildId) {
 
 async function loadActiveTicketsToMemory() {
     try {
-        const result = await turso.execute({
-            sql: `SELECT user_id, channel_id FROM active_tickets WHERE status = 'open'`
-        });
+        const result = await safeExecute(
+            `SELECT user_id, channel_id FROM active_tickets WHERE status = 'open'`
+        );
         
         const activeTickets = new Map();
         for (const row of result.rows) {
@@ -396,12 +424,12 @@ async function loadActiveTicketsToMemory() {
 
 async function saveGuildConfig(guildId, guildName, ownerId) {
     try {
-        await turso.execute({
-            sql: `INSERT OR REPLACE INTO guild_config 
-                  (guild_id, guild_name, owner_id, updated_at)
-                  VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
-            args: [guildId, guildName, ownerId]
-        });
+        await safeExecute(
+            `INSERT OR REPLACE INTO guild_config 
+             (guild_id, guild_name, owner_id, updated_at)
+             VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
+            [guildId, guildName, ownerId]
+        );
     } catch (error) {
         console.error('❌ Błąd zapisywania konfiguracji:', error);
     }
@@ -410,28 +438,28 @@ async function saveGuildConfig(guildId, guildName, ownerId) {
 async function updateGuildStats(guildId, memberCount) {
     try {
         const today = new Date().toISOString().split('T')[0];
-        await turso.execute({
-            sql: `INSERT OR REPLACE INTO guild_stats 
-                  (guild_id, date, member_count, created_at)
-                  VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
-            args: [guildId, today, memberCount]
-        });
+        await safeExecute(
+            `INSERT OR REPLACE INTO guild_stats 
+             (guild_id, date, member_count, created_at)
+             VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
+            [guildId, today, memberCount.toString()]
+        );
     } catch (error) {
         console.error('❌ Błąd aktualizacji statystyk:', error);
     }
 }
 
 // ═══════════════════════════════════════════════════════════
-// 🔐 FUNKCJE RESTORECORD (POZOSTAJĄ BEZ ZMIAN)
+// 🔐 FUNKCJE RESTORECORD
 // ═══════════════════════════════════════════════════════════
 
 async function saveAuthorizedUser(userData) {
     try {
-        await turso.execute({
-            sql: `INSERT OR REPLACE INTO authorized_users 
-                  (user_id, access_token, refresh_token, username, discriminator, avatar, email, authorized_at, last_used)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-            args: [
+        await safeExecute(
+            `INSERT OR REPLACE INTO authorized_users 
+             (user_id, access_token, refresh_token, username, discriminator, avatar, email, authorized_at, last_used)
+             VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+            [
                 userData.id,
                 userData.access_token,
                 userData.refresh_token,
@@ -440,7 +468,7 @@ async function saveAuthorizedUser(userData) {
                 userData.avatar,
                 userData.email
             ]
-        });
+        );
         console.log(`✅ Zapisano autoryzację: ${userData.username}#${userData.discriminator}`);
         return true;
     } catch (error) {
@@ -453,11 +481,11 @@ async function createServerBackup(guildId, guildName, ownerId, createdBy) {
     try {
         const backupId = crypto.randomUUID();
         
-        await turso.execute({
-            sql: `INSERT INTO server_backups (backup_id, guild_id, guild_name, owner_id, created_by)
-                  VALUES (?, ?, ?, ?, ?)`,
-            args: [backupId, guildId, guildName, ownerId, createdBy]
-        });
+        await safeExecute(
+            `INSERT INTO server_backups (backup_id, guild_id, guild_name, owner_id, created_by)
+             VALUES (?, ?, ?, ?, ?)`,
+            [backupId, guildId, guildName, ownerId, createdBy]
+        );
 
         return backupId;
     } catch (error) {
@@ -468,11 +496,11 @@ async function createServerBackup(guildId, guildName, ownerId, createdBy) {
 
 async function saveBackupMember(backupId, memberData) {
     try {
-        await turso.execute({
-            sql: `INSERT INTO backup_members 
-                  (backup_id, user_id, username, discriminator, avatar, joined_at, roles, nickname)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            args: [
+        await safeExecute(
+            `INSERT INTO backup_members 
+             (backup_id, user_id, username, discriminator, avatar, joined_at, roles, nickname)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
                 backupId,
                 memberData.id,
                 memberData.username,
@@ -482,7 +510,7 @@ async function saveBackupMember(backupId, memberData) {
                 JSON.stringify(memberData.roles),
                 memberData.nickname
             ]
-        });
+        );
         return true;
     } catch (error) {
         console.error('❌ Błąd zapisywania członka backupu:', error);
@@ -492,10 +520,10 @@ async function saveBackupMember(backupId, memberData) {
 
 async function getServerBackups(userId) {
     try {
-        const result = await turso.execute({
-            sql: `SELECT * FROM server_backups WHERE created_by = ? OR owner_id = ? ORDER BY created_at DESC`,
-            args: [userId, userId]
-        });
+        const result = await safeExecute(
+            `SELECT * FROM server_backups WHERE created_by = ? OR owner_id = ? ORDER BY created_at DESC`,
+            [userId, userId]
+        );
         return result.rows;
     } catch (error) {
         console.error('❌ Błąd pobierania backupów:', error);
@@ -505,10 +533,10 @@ async function getServerBackups(userId) {
 
 async function getBackupMembers(backupId) {
     try {
-        const result = await turso.execute({
-            sql: `SELECT * FROM backup_members WHERE backup_id = ?`,
-            args: [backupId]
-        });
+        const result = await safeExecute(
+            `SELECT * FROM backup_members WHERE backup_id = ?`,
+            [backupId]
+        );
         return result.rows;
     } catch (error) {
         console.error('❌ Błąd pobierania członków backupu:', error);
@@ -517,7 +545,7 @@ async function getBackupMembers(backupId) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// 🌐 EXPRESS SERVER (BEZ ZMIAN)
+// 🌐 EXPRESS SERVER
 // ═══════════════════════════════════════════════════════════
 
 const app = express();
@@ -858,18 +886,14 @@ const client = new Client({
 });
 
 // ═══════════════════════════════════════════════════════════
-// 💾 ZMIENNE GLOBALNE (TERAZ ŁADOWANE Z BAZY)
+// 💾 ZMIENNE GLOBALNE
 // ═══════════════════════════════════════════════════════════
 
 const invites = new Map();
 let activeTickets = new Map();
 
-// Usuń stare pliki JSON (opcjonalne - pozostaw jako backup)
-// fs.existsSync('levels.json') && fs.unlinkSync('levels.json');
-// fs.existsSync('warnings.json') && fs.unlinkSync('warnings.json');
-
 // ═══════════════════════════════════════════════════════════
-// 🎫 TICKET CATEGORIES (BEZ ZMIAN)
+// 🎫 TICKET CATEGORIES
 // ═══════════════════════════════════════════════════════════
 
 const TICKET_CATEGORIES = {
@@ -906,7 +930,7 @@ const TICKET_CATEGORIES = {
 };
 
 // ═══════════════════════════════════════════════════════════
-// ⚙️ FUNKCJE POMOCNICZE (ZAKTUALIZOWANE)
+// ⚙️ FUNKCJE POMOCNICZE
 // ═══════════════════════════════════════════════════════════
 
 async function loadInvites(guild) {
@@ -925,6 +949,8 @@ async function loadInvites(guild) {
         console.log(`✅ Załadowano ${savedInvites.size} zaproszeń dla ${guild.name}`);
     } catch (error) {
         console.error(`❌ Błąd ładowania zaproszeń dla ${guild.name}:`, error.message);
+        // Fallback do pustej mapy
+        invites.set(guild.id, new Map());
     }
 }
 
@@ -953,7 +979,7 @@ async function updateMemberCount(guild) {
     }
 }
 
-// Funkcja bezpiecznej odpowiedzi na interakcję (bez zmian)
+// Funkcja bezpiecznej odpowiedzi na interakcję
 async function safeReply(interaction, options) {
     try {
         if (interaction.replied || interaction.deferred) {
@@ -968,7 +994,7 @@ async function safeReply(interaction, options) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// 🤖 BOT READY (ZAKTUALIZOWANE)
+// 🤖 BOT READY
 // ═══════════════════════════════════════════════════════════
 
 client.once('ready', async () => {
@@ -980,13 +1006,22 @@ client.once('ready', async () => {
 ╚═══════════════════════════════════════╝
     `);
     
-    // Inicjalizuj bazę danych
-    console.log('📊 Inicjalizowanie bazy danych...');
-    await initDatabase();
+    // Test połączenia z bazą danych
+    console.log('🔗 Testowanie połączenia z bazą danych...');
+    const dbConnected = await testDatabaseConnection();
     
-    // Załaduj aktywne tickety z bazy
-    console.log('🎫 Ładowanie aktywnych ticketów...');
-    activeTickets = await loadActiveTicketsToMemory();
+    if (dbConnected) {
+        // Inicjalizuj bazę danych
+        console.log('📊 Inicjalizowanie bazy danych...');
+        await initDatabase();
+        
+        // Załaduj aktywne tickety z bazy
+        console.log('🎫 Ładowanie aktywnych ticketów...');
+        activeTickets = await loadActiveTicketsToMemory();
+    } else {
+        console.log('⚠️ Bot działa w trybie bez bazy danych');
+        activeTickets = new Map();
+    }
     
     client.user.setActivity('🔒 Secured RestoreCord Bot', { type: 3 });
     
@@ -1007,12 +1042,12 @@ client.once('ready', async () => {
     console.log('✅ Wszystkie systemy działają!');
     console.log(`📊 Serwery: ${client.guilds.cache.size}`);
     console.log(`👥 Użytkownicy: ${client.users.cache.size}`);
-    console.log(`🔒 Baza danych: Turso - Zabezpieczone`);
-    console.log(`🌐 OAuth URL: http://localhost:${PORT}/auth`);
+    console.log(`🔒 Baza danych: ${dbConnected ? 'Turso - Połączono' : 'Offline'}`);
+    console.log(`🌐 OAuth URL: ${REDIRECT_URI.replace('/auth/callback', '/auth')}`);
 });
 
 // ═══════════════════════════════════════════════════════════
-// 👋 SYSTEM POWITALNY (ZAKTUALIZOWANY)
+// 👋 SYSTEM POWITALNY
 // ═══════════════════════════════════════════════════════════
 
 client.on('guildMemberAdd', async (member) => {
@@ -1100,7 +1135,7 @@ client.on('guildMemberRemove', async (member) => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// 📝 SYSTEM POZIOMÓW (ZAKTUALIZOWANY)
+// 📝 SYSTEM POZIOMÓW
 // ═══════════════════════════════════════════════════════════
 
 client.on('messageCreate', async (message) => {
@@ -1133,7 +1168,7 @@ client.on('messageCreate', async (message) => {
             await levelChannel.send({ embeds: [levelUpEmbed] });
         }
         
-        // Reakcje (bez zmian)
+        // Reakcje
         const content = message.content.toLowerCase();
         if (content.includes('bot')) await message.react('🤖').catch(() => {});
         if (content.includes('❤️')) await message.react('❤️').catch(() => {});
@@ -1144,7 +1179,7 @@ client.on('messageCreate', async (message) => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// 🗑️ LOGI WIADOMOŚCI (BEZ ZMIAN)
+// 🗑️ LOGI WIADOMOŚCI
 // ═══════════════════════════════════════════════════════════
 
 client.on('messageDelete', async (message) => {
@@ -1195,7 +1230,7 @@ client.on('messageUpdate', async (oldMessage, newMessage) => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// 📨 INVITES (ZAKTUALIZOWANE)
+// 📨 INVITES
 // ═══════════════════════════════════════════════════════════
 
 client.on('inviteCreate', async (invite) => {
@@ -1223,16 +1258,16 @@ client.on('inviteDelete', async (invite) => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// 🎮 INTERAKCJE (ZAKTUALIZOWANE DLA BAZY DANYCH)
+// 🎮 INTERAKCJE
 // ═══════════════════════════════════════════════════════════
 
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand() && !interaction.isButton() && !interaction.isStringSelectMenu()) return;
     
     try {
-        // 🔐 AUTHORIZE COMMAND (bez zmian)
+        // 🔐 AUTHORIZE COMMAND
         if (interaction.commandName === 'authorize') {
-            const authUrl = `http://localhost:${PORT}/auth`;
+            const authUrl = `${REDIRECT_URI.replace('/auth/callback', '/auth')}`;
             
             const embed = new EmbedBuilder()
                 .setColor('#5865F2')
@@ -1263,7 +1298,7 @@ client.on('interactionCreate', async (interaction) => {
             });
         }
 
-        // 📋 BACKUP SERVER COMMAND (bez zmian)
+        // 📋 BACKUP SERVER COMMAND
         if (interaction.commandName === 'backup-server') {
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
                 return await safeReply(interaction, {
@@ -1309,10 +1344,10 @@ client.on('interactionCreate', async (interaction) => {
                 }
 
                 // Zaktualizuj liczbę członków w backupie
-                await turso.execute({
-                    sql: `UPDATE server_backups SET member_count = ? WHERE backup_id = ?`,
-                    args: [savedCount, backupId]
-                });
+                await safeExecute(
+                    `UPDATE server_backups SET member_count = ? WHERE backup_id = ?`,
+                    [savedCount.toString(), backupId]
+                );
 
                 const embed = new EmbedBuilder()
                     .setColor('#00ff00')
@@ -1338,7 +1373,7 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
 
-        // 🔄 RESTORE MEMBERS COMMAND (bez zmian)  
+        // 🔄 RESTORE MEMBERS COMMAND  
         if (interaction.commandName === 'restore-members') {
             const backupId = interaction.options.getString('backup_id');
 
@@ -1353,10 +1388,10 @@ client.on('interactionCreate', async (interaction) => {
 
             try {
                 // Sprawdź czy backup istnieje
-                const backupResult = await turso.execute({
-                    sql: `SELECT * FROM server_backups WHERE backup_id = ?`,
-                    args: [backupId]
-                });
+                const backupResult = await safeExecute(
+                    `SELECT * FROM server_backups WHERE backup_id = ?`,
+                    [backupId]
+                );
 
                 if (backupResult.rows.length === 0) {
                     return await safeReply(interaction, {
@@ -1390,10 +1425,10 @@ client.on('interactionCreate', async (interaction) => {
                 // Wyślij zaproszenia do autoryzowanych użytkowników
                 for (const member of members) {
                     try {
-                        const userResult = await turso.execute({
-                            sql: `SELECT access_token FROM authorized_users WHERE user_id = ?`,
-                            args: [member.user_id]
-                        });
+                        const userResult = await safeExecute(
+                            `SELECT access_token FROM authorized_users WHERE user_id = ?`,
+                            [member.user_id]
+                        );
 
                         if (userResult.rows.length > 0) {
                             // Użytkownik jest autoryzowany - można wysłać DM
@@ -1454,7 +1489,7 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
 
-        // 📋 MY BACKUPS COMMAND (bez zmian)
+        // 📋 MY BACKUPS COMMAND
         if (interaction.commandName === 'my-backups') {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -1493,7 +1528,7 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
 
-        // 🎫 TICKET PANEL (ZAKTUALIZOWANY)
+        // 🎫 TICKET PANEL
         if (interaction.commandName === 'ticket') {
             const embed = new EmbedBuilder()
                 .setColor('#5865F2')
@@ -1533,7 +1568,7 @@ client.on('interactionCreate', async (interaction) => {
             });
         }
 
-        // Użytkownik wybiera kategorię ticketu (ZAKTUALIZOWANY)
+        // Użytkownik wybiera kategorię ticketu
         if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_select') {
             if (!interaction.deferred && !interaction.replied) {
                 await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -1627,7 +1662,7 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
 
-        // Zamknięcie ticketu (ZAKTUALIZOWANY)
+        // Zamknięcie ticketu
         if (interaction.customId === 'close_ticket') {
             await safeReply(interaction, { 
                 content: '🔒 Ticket zostanie zamknięty za 5 sekund...' 
@@ -1646,7 +1681,7 @@ client.on('interactionCreate', async (interaction) => {
             }, 5000);
         }
 
-        // 📊 LEVEL (ZAKTUALIZOWANY)
+        // 📊 LEVEL
         if (interaction.commandName === 'level') {
             const target = interaction.options.getUser('użytkownik') || interaction.user;
             const userData = await getUserLevel(target.id, interaction.guild.id);
@@ -1669,7 +1704,7 @@ client.on('interactionCreate', async (interaction) => {
             await safeReply(interaction, { embeds: [embed] });
         }
 
-        // 🏆 LEADERBOARD (ZAKTUALIZOWANY)
+        // 🏆 LEADERBOARD
         if (interaction.commandName === 'leaderboard') {
             const topUsers = await getTopUsers(interaction.guild.id, 10);
             
@@ -1691,7 +1726,7 @@ client.on('interactionCreate', async (interaction) => {
             await safeReply(interaction, { embeds: [embed] });
         }
 
-        // 👤 AVATAR (bez zmian)
+        // 👤 AVATAR
         if (interaction.commandName === 'avatar') {
             const target = interaction.options.getUser('użytkownik') || interaction.user;
             const embed = new EmbedBuilder()
@@ -1702,7 +1737,7 @@ client.on('interactionCreate', async (interaction) => {
             await safeReply(interaction, { embeds: [embed] });
         }
 
-        // 📊 SERVERINFO (bez zmian)
+        // 📊 SERVERINFO
         if (interaction.commandName === 'serverinfo') {
             const { guild } = interaction;
             const embed = new EmbedBuilder()
@@ -1722,7 +1757,7 @@ client.on('interactionCreate', async (interaction) => {
             await safeReply(interaction, { embeds: [embed] });
         }
 
-        // 👤 USERINFO (bez zmian)
+        // 👤 USERINFO
         if (interaction.commandName === 'userinfo') {
             const target = interaction.options.getUser('użytkownik') || interaction.user;
             const member = await interaction.guild.members.fetch(target.id);
@@ -1747,7 +1782,7 @@ client.on('interactionCreate', async (interaction) => {
             await safeReply(interaction, { embeds: [embed] });
         }
 
-        // 🎲 ROLL (bez zmian)
+        // 🎲 ROLL
         if (interaction.commandName === 'roll') {
             const max = interaction.options.getInteger('maksimum') || 100;
             const result = Math.floor(Math.random() * max) + 1;
@@ -1759,7 +1794,7 @@ client.on('interactionCreate', async (interaction) => {
             await safeReply(interaction, { embeds: [embed] });
         }
 
-        // 🎱 8BALL (bez zmian)
+        // 🎱 8BALL
         if (interaction.commandName === '8ball') {
             const question = interaction.options.getString('pytanie');
             const answers = [
@@ -1780,7 +1815,7 @@ client.on('interactionCreate', async (interaction) => {
             await safeReply(interaction, { embeds: [embed] });
         }
 
-        // ℹ️ HELP (ZAKTUALIZOWANY)
+        // ℹ️ HELP
         if (interaction.commandName === 'help') {
             const embed = new EmbedBuilder()
                 .setColor('#5865F2')
@@ -1814,7 +1849,7 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// 📋 REJESTRACJA KOMEND (BEZ ZMIAN)
+// 📋 REJESTRACJA KOMEND
 // ═══════════════════════════════════════════════════════════
 
 async function registerCommands() {
