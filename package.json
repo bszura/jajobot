@@ -1,18 +1,31 @@
 {
-  "name": "discord-bot-clean",
+  "name": "ultimate-discord-bot",
   "version": "1.0.0",
-  "description": "Discord bot clean start",
+  "description": "Ultimate Discord Bot with RestoreCord functionality",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
-  },
-  "engines": {
-    "node": "20.11.0"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "@libsql/client": "^0.4.3",
+    "axios": "^1.6.2"
   },
-  "author": "",
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "restorecord",
+    "turso",
+    "express"
+  ],
+  "author": "Your Name",
   "license": "MIT"
 }
