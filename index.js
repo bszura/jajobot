@@ -219,6 +219,22 @@ async function initDatabase() {
             )
         `);
 
+        // 🆕 Tabela statystyk zaproszeń użytkowników
+        await safeExecute(`
+            CREATE TABLE IF NOT EXISTS user_invite_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                guild_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                total_invites INTEGER DEFAULT 0,
+                valid_invites INTEGER DEFAULT 0,
+                left_invites INTEGER DEFAULT 0,
+                fake_invites INTEGER DEFAULT 0,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, guild_id)
+            )
+        `);
+
         console.log('✅ Wszystkie tabele bazy danych zainicjalizowane!');
     } catch (error) {
         console.error('❌ Błąd inicjalizacji bazy danych:', error);
@@ -352,6 +368,121 @@ async function saveMemberJoin(userId, guildId, username, invitedBy = null, invit
         );
     } catch (error) {
         console.error('❌ Błąd zapisywania dołączenia:', error);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 📨 FUNKCJE STATYSTYK ZAPROSZEŃ
+// ═══════════════════════════════════════════════════════════
+
+async function updateInviteStats(inviterId, guildId, username, action = 'add') {
+    try {
+        if (!inviterId) return;
+
+        // Pobierz aktualne statystyki
+        const result = await safeExecute(
+            `SELECT * FROM user_invite_stats WHERE user_id = ? AND guild_id = ?`,
+            [inviterId, guildId]
+        );
+
+        let totalInvites = 0;
+        let validInvites = 0;
+        let leftInvites = 0;
+        let fakeInvites = 0;
+
+        if (result.rows.length > 0) {
+            const stats = result.rows[0];
+            totalInvites = parseInt(stats.total_invites) || 0;
+            validInvites = parseInt(stats.valid_invites) || 0;
+            leftInvites = parseInt(stats.left_invites) || 0;
+            fakeInvites = parseInt(stats.fake_invites) || 0;
+        }
+
+        // Aktualizuj statystyki w zależności od akcji
+        if (action === 'add') {
+            totalInvites++;
+            validInvites++;
+        } else if (action === 'leave') {
+            validInvites = Math.max(0, validInvites - 1);
+            leftInvites++;
+        } else if (action === 'fake') {
+            totalInvites++;
+            fakeInvites++;
+        }
+
+        // Zapisz do bazy
+        await safeExecute(
+            `INSERT OR REPLACE INTO user_invite_stats 
+             (user_id, guild_id, username, total_invites, valid_invites, left_invites, fake_invites, last_updated)
+             VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+            [inviterId, guildId, username, totalInvites.toString(), validInvites.toString(), 
+             leftInvites.toString(), fakeInvites.toString()]
+        );
+
+        console.log(`✅ Zaktualizowano statystyki zaproszeń dla ${username}: total=${totalInvites}, valid=${validInvites}`);
+        return true;
+    } catch (error) {
+        console.error('❌ Błąd aktualizacji statystyk zaproszeń:', error);
+        return false;
+    }
+}
+
+async function getInviteStats(userId, guildId) {
+    try {
+        const result = await safeExecute(
+            `SELECT * FROM user_invite_stats WHERE user_id = ? AND guild_id = ?`,
+            [userId, guildId]
+        );
+
+        if (result.rows.length > 0) {
+            const stats = result.rows[0];
+            return {
+                total: parseInt(stats.total_invites) || 0,
+                valid: parseInt(stats.valid_invites) || 0,
+                left: parseInt(stats.left_invites) || 0,
+                fake: parseInt(stats.fake_invites) || 0
+            };
+        }
+
+        return { total: 0, valid: 0, left: 0, fake: 0 };
+    } catch (error) {
+        console.error('❌ Błąd pobierania statystyk zaproszeń:', error);
+        return { total: 0, valid: 0, left: 0, fake: 0 };
+    }
+}
+
+async function getTopInviters(guildId, limit = 10) {
+    try {
+        const result = await safeExecute(
+            `SELECT * FROM user_invite_stats 
+             WHERE guild_id = ? 
+             ORDER BY valid_invites DESC 
+             LIMIT ?`,
+            [guildId, limit.toString()]
+        );
+        return result.rows;
+    } catch (error) {
+        console.error('❌ Błąd pobierania rankingu zaproszeń:', error);
+        return [];
+    }
+}
+
+async function getInviterByMemberId(memberId, guildId) {
+    try {
+        const result = await safeExecute(
+            `SELECT invited_by FROM member_joins 
+             WHERE user_id = ? AND guild_id = ? 
+             ORDER BY joined_at DESC LIMIT 1`,
+            [memberId, guildId]
+        );
+
+        if (result.rows.length > 0) {
+            return result.rows[0].invited_by;
+        }
+        return null;
+    } catch (error) {
+        console.error('❌ Błąd pobierania zapraszającego:', error);
+        return null;
     }
 }
 
@@ -829,6 +960,7 @@ app.get('/dashboard', async (req, res) => {
                 <ul>
                     <li>✅ Poziomy użytkowników - zapisane w bazie</li>
                     <li>✅ Historia zaproszeń - zapisana w bazie</li>
+                    <li>✅ Statystyki zaproszeń - zapisane w bazie</li>
                     <li>✅ Aktywne tickety - zapisane w bazie</li>
                     <li>✅ Konfiguracja serwerów - zapisana w bazie</li>
                     <li>✅ Backupy RestoreCord - zapisane w bazie</li>
@@ -1084,10 +1216,32 @@ client.on('guildMemberAdd', async (member) => {
             usedInviteCode,
             member.user.createdAt.toISOString()
         );
+
+        // 🆕 ZAKTUALIZUJ STATYSTYKI ZAPROSZEŃ
+        if (inviter) {
+            // Sprawdź czy konto nie jest fake (młodsze niż 7 dni)
+            const accountAge = Date.now() - member.user.createdTimestamp;
+            const sevenDays = 7 * 24 * 60 * 60 * 1000;
+
+            if (accountAge < sevenDays) {
+                // Konto fake - oznacz jako fake
+                await updateInviteStats(inviter.id, member.guild.id, inviter.tag, 'fake');
+            } else {
+                // Prawidłowe zaproszenie
+                await updateInviteStats(inviter.id, member.guild.id, inviter.tag, 'add');
+            }
+        }
         
         const lobbyChannel = member.guild.channels.cache.get(process.env.LOBBY_CHANNEL_ID);
         
         if (lobbyChannel) {
+            // Pobierz statystyki zapraszającego
+            let inviterStats = '';
+            if (inviter) {
+                const stats = await getInviteStats(inviter.id, member.guild.id);
+                inviterStats = `\n📊 Zaproszenia: **${stats.valid}** (${stats.total} total)`;
+            }
+
             const welcomeEmbed = new EmbedBuilder()
                 .setColor('#00ff00')
                 .setTitle('🎉 Witamy na serwerze!')
@@ -1095,7 +1249,7 @@ client.on('guildMemberAdd', async (member) => {
                 .addFields(
                     { 
                         name: '📨 Zaproszony przez', 
-                        value: inviter ? `**${inviter.tag}**` : '❓ Nieznane',
+                        value: inviter ? `**${inviter.tag}**${inviterStats}` : '❓ Nieznane',
                         inline: true 
                     },
                     { 
@@ -1124,6 +1278,17 @@ client.on('guildMemberAdd', async (member) => {
 
 client.on('guildMemberRemove', async (member) => {
     try {
+        // Pobierz kto zaprosił tego użytkownika
+        const inviterId = await getInviterByMemberId(member.id, member.guild.id);
+        
+        if (inviterId) {
+            // Zmniejsz licznik valid invites dla zapraszającego
+            const inviter = await client.users.fetch(inviterId).catch(() => null);
+            if (inviter) {
+                await updateInviteStats(inviterId, member.guild.id, inviter.tag, 'leave');
+            }
+        }
+
         const lobbyChannel = member.guild.channels.cache.get(process.env.LOBBY_CHANNEL_ID);
         if (lobbyChannel) {
             await lobbyChannel.send(`👋 **${member.user.tag}** opuścił serwer...`);
@@ -1528,6 +1693,89 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
 
+        // 📊 INVITES COMMAND - sprawdź swoje zaproszenia
+        if (interaction.commandName === 'invites') {
+            const target = interaction.options.getUser('użytkownik') || interaction.user;
+            const stats = await getInviteStats(target.id, interaction.guild.id);
+            
+            const embed = new EmbedBuilder()
+                .setColor('#5865F2')
+                .setTitle(`📊 Statystyki zaproszeń ${target.tag}`)
+                .setThumbnail(target.displayAvatarURL({ dynamic: true }))
+                .setDescription(
+                    `**Zaproszenia użytkownika ${target}**\n\n` +
+                    `📈 **Łącznie zaproszeń:** ${stats.total}\n` +
+                    `✅ **Aktywnych:** ${stats.valid}\n` +
+                    `👋 **Opuściło serwer:** ${stats.left}\n` +
+                    `🚫 **Fake/Bot:** ${stats.fake}`
+                )
+                .addFields(
+                    { name: '📊 Łącznie', value: `**${stats.total}**`, inline: true },
+                    { name: '✅ Ważne', value: `**${stats.valid}**`, inline: true },
+                    { name: '👋 Wyszło', value: `**${stats.left}**`, inline: true }
+                )
+                .setFooter({ text: '🔒 Dane z zabezpieczonej bazy danych' })
+                .setTimestamp();
+            
+            await safeReply(interaction, { embeds: [embed] });
+        }
+
+        // 🏆 INVITES LEADERBOARD - ranking zapraszających
+        if (interaction.commandName === 'invites-leaderboard') {
+            const topInviters = await getTopInviters(interaction.guild.id, 10);
+            
+            let description = '';
+            for (let i = 0; i < topInviters.length; i++) {
+                const inviterData = topInviters[i];
+                const user = await client.users.fetch(inviterData.user_id).catch(() => null);
+                const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
+                description += `${medal} **${user?.tag || inviterData.username}**\n`;
+                description += `   ✅ Aktywnych: **${inviterData.valid_invites}** | `;
+                description += `📊 Total: **${inviterData.total_invites}**\n\n`;
+            }
+            
+            const embed = new EmbedBuilder()
+                .setColor('#FFD700')
+                .setTitle('🏆 Ranking Zaproszeń - Top 10')
+                .setDescription(description || 'Brak danych')
+                .setFooter({ text: '🔒 Dane z zabezpieczonej bazy danych' })
+                .setTimestamp();
+            
+            await safeReply(interaction, { embeds: [embed] });
+        }
+
+        // 🔄 RESET INVITES - resetuj zaproszenia użytkownika (tylko admin)
+        if (interaction.commandName === 'reset-invites') {
+            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                return await safeReply(interaction, {
+                    content: '❌ Potrzebujesz uprawnień administratora!',
+                    flags: MessageFlags.Ephemeral
+                });
+            }
+
+            const target = interaction.options.getUser('użytkownik');
+            
+            try {
+                await safeExecute(
+                    `DELETE FROM user_invite_stats WHERE user_id = ? AND guild_id = ?`,
+                    [target.id, interaction.guild.id]
+                );
+
+                const embed = new EmbedBuilder()
+                    .setColor('#00ff00')
+                    .setTitle('✅ Zaproszenia zresetowane')
+                    .setDescription(`Statystyki zaproszeń dla ${target} zostały zresetowane.`)
+                    .setTimestamp();
+
+                await safeReply(interaction, { embeds: [embed] });
+            } catch (error) {
+                console.error('❌ Błąd resetowania zaproszeń:', error);
+                await safeReply(interaction, {
+                    content: '❌ Wystąpił błąd podczas resetowania zaproszeń!'
+                });
+            }
+        }
+
         // 🎫 TICKET PANEL
         if (interaction.commandName === 'ticket') {
             const embed = new EmbedBuilder()
@@ -1823,6 +2071,7 @@ client.on('interactionCreate', async (interaction) => {
                 .setDescription('Wszystkie dostępne komendy bota:')
                 .addFields(
                     { name: '🔐 RestoreCord', value: '`/authorize` - Autoryzuj konto Discord\n`/backup-server` - Utwórz backup serwera\n`/restore-members` - Przywróć członków\n`/my-backups` - Twoje backupy' },
+                    { name: '📨 Zaproszenia', value: '`/invites` - Sprawdź swoje zaproszenia\n`/invites-leaderboard` - Ranking zapraszających\n`/reset-invites` - Reset zaproszeń (admin)' },
                     { name: '🎫 Tickety', value: '`/ticket` - Wyślij panel ticketów na kanał (admin)' },
                     { name: '📊 Poziomy', value: '`/level` - Sprawdź poziom\n`/leaderboard` - Ranking top 10' },
                     { name: '👤 Informacje', value: '`/avatar` - Avatar\n`/userinfo` - Info o użytkowniku\n`/serverinfo` - Info o serwerze' },
@@ -1875,6 +2124,30 @@ async function registerCommands() {
         { 
             name: 'my-backups', 
             description: 'Pokaż listę twoich backupów' 
+        },
+        { 
+            name: 'invites', 
+            description: 'Sprawdź statystyki zaproszeń użytkownika',
+            options: [{ 
+                name: 'użytkownik', 
+                description: 'Wybierz użytkownika do sprawdzenia',
+                type: 6, 
+                required: false 
+            }]
+        },
+        { 
+            name: 'invites-leaderboard', 
+            description: 'Zobacz ranking użytkowników z największą liczbą zaproszeń' 
+        },
+        { 
+            name: 'reset-invites', 
+            description: 'Zresetuj statystyki zaproszeń użytkownika (admin)',
+            options: [{ 
+                name: 'użytkownik', 
+                description: 'Wybierz użytkownika do zresetowania',
+                type: 6, 
+                required: true 
+            }]
         },
         { 
             name: 'ticket', 
